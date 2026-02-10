@@ -1,0 +1,93 @@
+.connector-view {
+  position: relative;
+  padding: 24px;
+  background: linear-gradient(145deg, var(--bg-dark) 0%, #151d28 100%);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.connector-svg {
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+  min-height: 200px;
+}
+
+.connector-shell {
+  rx: 4;
+}
+
+.pin-wire {
+  transition: stroke 0.15s ease;
+}
+
+.pin-group {
+  /* no transform on group – avoids layout shift */
+}
+
+.pin-zoom {
+  transform-origin: 0 0; /* circle center in local coords */
+  transition: transform 0.15s ease;
+}
+
+.pin-group:hover .pin-zoom {
+  transform: scale(1.15);
+}
+
+.pin-circle {
+  transition: stroke 0.15s ease, filter 0.15s ease;
+}
+
+.pin-selected {
+  stroke: #fff !important;
+  stroke-width: 3;
+}
+
+.pin-number-label {
+  font-size: 10px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.connector-labels {
+  width: 100%;
+  max-width: 520px;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pin-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 0;
+  justify-content: center;
+}
+
+.pin-label-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.04);
+}
+
+.pin-label-num {
+  color: var(--text-muted);
+  font-weight: 700;
+  min-width: 14px;
+}
+
+.pin-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}

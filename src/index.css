@@ -1,0 +1,42 @@
+:root {
+  --bg-dark: #0f1419;
+  --bg-panel: #1a2332;
+  --bg-pin: #2a3544;
+  --border: #3d4f5f;
+  --text: #e6edf3;
+  --text-muted: #8b9cad;
+  --accent: #58a6ff;
+  --accent-hover: #79b8ff;
+  --live: #dc3545;
+  --ground: #212529;
+  --can-high: #0d6efd;
+  --can-low: #0dcaf0;
+  --success: #198754;
+  --panel-width: 320px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  background: var(--bg-dark);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input, select, textarea {
+  font-family: inherit;
+}
