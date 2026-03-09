@@ -32,6 +32,87 @@
   flex-wrap: wrap;
 }
 
+.mode-toggle-wrap {
+  display: flex;
+  gap: 4px;
+}
+
+.mode-toggle-btn {
+  padding: 8px 14px;
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.mode-toggle-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mode-toggle-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.mode-toggle-active:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: #fff;
+}
+
+.cable-connectors-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cable-connector-item .connector-select-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-add-connector {
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-add-connector:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-remove-connector {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-remove-connector:hover {
+  border-color: #dc3545;
+  color: #dc3545;
+}
+
 .connector-select-wrap {
   display: flex;
   align-items: center;

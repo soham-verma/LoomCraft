@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
-import { useConnectorState } from './hooks/useConnectorState'
+import { useCableAssemblyState } from './hooks/useCableAssemblyState'
 import { CONNECTOR_GROUPS } from './connectors/config'
 import { ConnectorView } from './components/ConnectorView'
+import { CableAssemblyView } from './components/CableAssemblyView'
 import { PinSidePanel } from './components/PinSidePanel'
 import './App.css'
 
@@ -24,14 +25,42 @@ export default function App() {
     deleteConfig,
     exportToFile,
     importFromFile,
-  } = useConnectorState()
+    cableConnectors,
+    cableConnectorTypes,
+    getConnector,
+    getPinStateAt,
+    updatePinAt,
+    setConnectorTypeAt,
+    addConnector,
+    removeConnector,
+    pinLinks,
+    addLink,
+    removeLink,
+    getLinkedPin,
+    selectedCablePin,
+    setSelectedCablePin,
+    resetAllPinsAt,
+    resetPinAt,
+  } = useCableAssemblyState()
 
+  const [mode, setMode] = useState('single')
   const [saveName, setSaveName] = useState('')
   const [showSaveInput, setShowSaveInput] = useState(false)
   const [showSavedList, setShowSavedList] = useState(false)
   const [importError, setImportError] = useState(null)
   const fileInputRef = React.useRef(null)
-  const selectedPinState = selectedPinNumber != null ? getPinState(selectedPinNumber) : null
+
+  const isCableMode = mode === 'cable'
+  const selectedPin = isCableMode ? selectedCablePin : selectedPinNumber
+
+  const cableConnectorsList = [connector, ...cableConnectorTypes.filter(Boolean)]
+
+  const selectedPinState =
+    selectedPin != null
+      ? typeof selectedPin === 'object'
+        ? getPinStateAt(selectedPin.connectorIndex, selectedPin.pinNumber)
+        : getPinState(selectedPin)
+      : null
 
   const handleSaveAs = () => {
     if (saveName.trim()) {
@@ -58,48 +87,122 @@ export default function App() {
     const file = e.target.files?.[0]
     if (!file) return
     importFromFile(file)
-      .then(() => {
-        setImportError(null)
-      })
-      .catch((err) => {
-        setImportError(err?.message || 'Failed to import file')
-      })
+      .then(() => setImportError(null))
+      .catch((err) => setImportError(err?.message || 'Failed to import file'))
     e.target.value = ''
+  }
+
+  const handleResetAllCable = () => {
+    cableConnectorsList.forEach((_, i) => resetAllPinsAt(i))
   }
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1 className="app-title">Connector Pin Tool</h1>
-        <p className="app-subtitle">Click a pin to edit its label and wire color</p>
+        <h1 className="app-title">LoomCraft</h1>
+        <p className="app-subtitle">
+          {isCableMode ? 'Link pins between connectors — add as many as you need' : 'Click a pin to edit its label and wire color'}
+        </p>
         <div className="app-toolbar">
-          <div className="connector-select-wrap">
-            <label htmlFor="connector-type">Connector</label>
-            <select
-              id="connector-type"
-              value={connectorTypeId}
-              onChange={(e) => {
-                setConnectorTypeId(e.target.value)
-                setSelectedPinNumber(null)
-              }}
-              className="connector-select"
+          <div className="mode-toggle-wrap">
+            <button
+              type="button"
+              className={`mode-toggle-btn ${!isCableMode ? 'mode-toggle-active' : ''}`}
+              onClick={() => { setMode('single'); setSelectedCablePin(null); }}
             >
-              {CONNECTOR_GROUPS.map((group) => (
-                <optgroup key={group.label} label={group.label}>
-                  {group.ids.map((id) => {
-                    const c = connectorTypes[id]
-                    if (!c) return null
-                    return (
-                      <option key={id} value={id}>
-                        {c.name}
-                      </option>
-                    )
-                  })}
-                </optgroup>
-              ))}
-            </select>
+              Single connector
+            </button>
+            <button
+              type="button"
+              className={`mode-toggle-btn ${isCableMode ? 'mode-toggle-active' : ''}`}
+              onClick={() => { setMode('cable'); setSelectedPinNumber(null); }}
+            >
+              Cable assembly
+            </button>
           </div>
-          <button type="button" className="btn-reset-all" onClick={resetAllPins}>
+
+          {isCableMode ? (
+            <div className="cable-connectors-wrap">
+              {cableConnectorsList.map((conn, i) => (
+                <div key={i} className="connector-select-wrap cable-connector-item">
+                  <label htmlFor={`connector-${i}`}>Connector {i + 1}</label>
+                  <div className="connector-select-row">
+                    <select
+                      id={`connector-${i}`}
+                      value={i === 0 ? connectorTypeId : cableConnectors[i - 1]?.connectorTypeId}
+                      onChange={(e) => {
+                        setConnectorTypeAt(i, e.target.value)
+                        setSelectedCablePin(null)
+                      }}
+                      className="connector-select"
+                    >
+                      {CONNECTOR_GROUPS.map((group) => (
+                        <optgroup key={group.label} label={group.label}>
+                          {group.ids.map((id) => {
+                            const c = connectorTypes[id]
+                            if (!c) return null
+                            return (
+                              <option key={id} value={id}>
+                                {c.name}
+                              </option>
+                            )
+                          })}
+                        </optgroup>
+                      ))}
+                    </select>
+                    {cableConnectorsList.length > 1 && i > 0 && (
+                      <button
+                        type="button"
+                        className="btn-remove-connector"
+                        onClick={() => removeConnector(i)}
+                        title="Remove connector"
+                        aria-label={`Remove connector ${i + 1}`}
+                      >
+                        −
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn-add-connector"
+                onClick={addConnector}
+                title="Add connector"
+              >
+                + Add connector
+              </button>
+            </div>
+          ) : (
+            <div className="connector-select-wrap">
+              <label htmlFor="connector-type">Connector</label>
+              <select
+                id="connector-type"
+                value={connectorTypeId}
+                onChange={(e) => {
+                  setConnectorTypeId(e.target.value)
+                  setSelectedPinNumber(null)
+                }}
+                className="connector-select"
+              >
+                {CONNECTOR_GROUPS.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.ids.map((id) => {
+                      const c = connectorTypes[id]
+                      if (!c) return null
+                      return (
+                        <option key={id} value={id}>
+                          {c.name}
+                        </option>
+                      )
+                    })}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <button type="button" className="btn-reset-all" onClick={isCableMode ? handleResetAllCable : resetAllPins}>
             Reset all pins
           </button>
 
@@ -203,23 +306,37 @@ export default function App() {
 
       <main className="app-main">
         <div className="app-canvas">
-          {isHydrated && (
+          {isHydrated && isCableMode && cableConnectorsList.some(Boolean) ? (
+            <CableAssemblyView
+              connectors={cableConnectorsList}
+              getPinStateAt={getPinStateAt}
+              pinLinks={pinLinks}
+              selectedPin={selectedCablePin}
+              onSelectPin={(connectorIndex, pinNumber) => setSelectedCablePin({ connectorIndex, pinNumber })}
+            />
+          ) : isHydrated ? (
             <ConnectorView
               connector={connector}
               getPinState={getPinState}
               selectedPinNumber={selectedPinNumber}
               onSelectPin={setSelectedPinNumber}
             />
-          )}
+          ) : null}
         </div>
 
-        {selectedPinNumber != null && (
+        {selectedPin != null && (
           <PinSidePanel
-            pinNumber={selectedPinNumber}
+            pinNumber={typeof selectedPin === 'object' ? selectedPin.pinNumber : selectedPin}
             pinState={selectedPinState}
-            onUpdatePin={updatePin}
-            onResetPin={resetPin}
-            onClose={() => setSelectedPinNumber(null)}
+            onUpdatePin={typeof selectedPin === 'object' ? (_pinNum, updates) => updatePinAt(selectedPin.connectorIndex, selectedPin.pinNumber, updates) : updatePin}
+            onResetPin={typeof selectedPin === 'object' ? () => resetPinAt(selectedPin.connectorIndex, selectedPin.pinNumber) : resetPin}
+            onClose={() => (isCableMode ? setSelectedCablePin(null) : setSelectedPinNumber(null))}
+            connectorIndex={typeof selectedPin === 'object' ? selectedPin.connectorIndex : null}
+            otherConnectors={typeof selectedPin === 'object' ? cableConnectorsList.filter((_, i) => i !== selectedPin.connectorIndex) : null}
+            connectorIndices={typeof selectedPin === 'object' ? cableConnectorsList.map((_, i) => i).filter((i) => i !== selectedPin.connectorIndex) : null}
+            linkedTo={typeof selectedPin === 'object' ? getLinkedPin(selectedPin.connectorIndex, selectedPin.pinNumber) : null}
+            onAddLink={addLink}
+            onRemoveLink={removeLink}
           />
         )}
       </main>

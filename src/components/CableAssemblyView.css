@@ -1,0 +1,98 @@
+.cable-assembly-view {
+  position: relative;
+  padding: 24px;
+  background: linear-gradient(145deg, var(--bg-dark) 0%, #151d28 100%);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.cable-assembly-svg {
+  width: 100%;
+  max-width: 900px;
+  height: auto;
+  min-height: 200px;
+}
+
+.cable-link-path {
+  transition: stroke 0.15s ease;
+}
+
+.cable-pin-wire {
+  transition: stroke 0.15s ease;
+}
+
+.cable-body {
+  opacity: 0.6;
+}
+
+.cable-assembly-labels {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 20px 32px;
+}
+
+.cable-connector-labels {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cable-connector-name {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.cable-labels-a .pin-label-row,
+.cable-labels-b .pin-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.cable-assembly-view .pin-label-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.cable-assembly-view .pin-label-num {
+  color: var(--text-muted);
+  font-weight: 700;
+  min-width: 14px;
+}
+
+.cable-assembly-view .pin-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.pin-group {
+  /* avoid layout shift */
+}
+
+.pin-zoom {
+  transform-origin: 0 0;
+  transition: transform 0.15s ease;
+}
+
+.pin-group:hover .pin-zoom {
+  transform: scale(1.15);
+}

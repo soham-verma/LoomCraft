@@ -184,3 +184,37 @@
   background: var(--border);
   color: var(--text);
 }
+
+.pin-link-field {
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+
+.pin-link-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pin-link-text {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.pin-link-select {
+  margin-top: 4px;
+}
+
+.pin-btn-unlink {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.pin-btn-unlink:hover {
+  border-color: #dc3545;
+  color: #dc3545;
+}

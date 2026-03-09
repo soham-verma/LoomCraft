@@ -8,6 +8,13 @@ export function PinSidePanel({
   onUpdatePin,
   onResetPin,
   onClose,
+  /** Cable mode: connectorIndex, other connectors + indices, link helpers */
+  connectorIndex,
+  otherConnectors,
+  connectorIndices,
+  linkedTo,
+  onAddLink,
+  onRemoveLink,
 }) {
   const [label, setLabel] = useState(pinState?.label ?? '')
   const [color, setColor] = useState(pinState?.color ?? '#6c757d')
@@ -22,7 +29,8 @@ export function PinSidePanel({
   const applyPreset = (preset) => {
     setPresetId(preset.id)
     setColor(preset.color)
-    onUpdatePin(pinNumber, { color: preset.color, presetId: preset.id })
+    setLabel(preset.label)
+    onUpdatePin(pinNumber, { color: preset.color, presetId: preset.id, label: preset.label })
   }
 
   const handleLabelBlur = () => {
@@ -45,10 +53,12 @@ export function PinSidePanel({
 
   if (pinNumber == null) return null
 
+  const pinTitle = connectorIndex != null ? `Connector ${connectorIndex + 1} — Pin ${pinNumber}` : `Pin ${pinNumber}`
+
   return (
     <div className="pin-side-panel">
       <div className="pin-side-panel-header">
-        <h3 className="pin-side-panel-title">Pin {pinNumber}</h3>
+        <h3 className="pin-side-panel-title">{pinTitle}</h3>
         <button type="button" className="pin-side-panel-close" onClick={onClose} aria-label="Close">
           ×
         </button>
@@ -105,6 +115,49 @@ export function PinSidePanel({
             />
           </div>
         </div>
+
+        {connectorIndex != null && otherConnectors?.length > 0 && connectorIndices && (
+          <div className="pin-side-panel-field pin-link-field">
+            <label>Point-to-point link</label>
+            {linkedTo != null ? (
+              <div className="pin-link-status">
+                <span className="pin-link-text">Linked to Connector {linkedTo.connectorIndex + 1} pin {linkedTo.pinNumber}</span>
+                <button type="button" className="pin-btn pin-btn-unlink" onClick={() => onRemoveLink?.(connectorIndex, pinNumber)}>
+                  Unlink
+                </button>
+              </div>
+            ) : (
+              <select
+                className="pin-side-panel-input pin-link-select"
+                value=""
+                onChange={(e) => {
+                  const v = e.target.value
+                  if (v) {
+                    const [targetIdx, targetPin] = v.split(':').map(Number)
+                    onAddLink?.(connectorIndex, pinNumber, targetIdx, targetPin)
+                  }
+                  e.target.value = ''
+                }}
+                aria-label="Link to pin on another connector"
+              >
+                <option value="">— Link to connector —</option>
+                {connectorIndices.map((targetIdx, idx) => {
+                  const other = otherConnectors[idx]
+                  if (!other) return null
+                  return (
+                    <optgroup key={targetIdx} label={`Connector ${targetIdx + 1}`}>
+                      {Array.from({ length: other.totalPins }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={`${targetIdx}:${n}`}>
+                          Pin {n} {other.defaultLabels?.[n] ? `(${other.defaultLabels[n]})` : ''}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )
+                })}
+              </select>
+            )}
+          </div>
+        )}
 
         <div className="pin-side-panel-actions">
           <button type="button" className="pin-btn pin-btn-secondary" onClick={handleReset}>

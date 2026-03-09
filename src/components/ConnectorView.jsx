@@ -1,6 +1,17 @@
 import React from 'react'
-import { getPinPositions, getConnectorBounds, WIRE_LENGTH, PIN_RADIUS } from '../connectors/connectorGeometry'
+import { getPinPositions, getConnectorBounds, PIN_RADIUS } from '../connectors/connectorGeometry'
 import './ConnectorView.css'
+
+function getLabelColor(wireColor) {
+  if (!wireColor) return 'var(--text-muted)'
+  let hex = String(wireColor).replace(/^#/, '')
+  if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
+  const r = parseInt(hex.slice(0, 2), 16) / 255
+  const g = parseInt(hex.slice(2, 4), 16) / 255
+  const b = parseInt(hex.slice(4, 6), 16) / 255
+  const luminance = 0.299 * r + 0.587 * g + 0.114 * b
+  return luminance < 0.4 ? '#e0e0e0' : wireColor
+}
 
 export function ConnectorView({ connector, getPinState, selectedPinNumber, onSelectPin }) {
   if (!connector) return null
@@ -10,7 +21,7 @@ export function ConnectorView({ connector, getPinState, selectedPinNumber, onSel
   const svgPadding = 60
   const shape = connector.shape ?? 'dsub'
 
-  const width = bounds.width + svgPadding * 2 + WIRE_LENGTH
+  const width = bounds.width + svgPadding * 2
   const height = bounds.height + svgPadding * 2
 
   // Triangle shell for 3-pin power: vertices in content coords, then to shell local
@@ -97,28 +108,7 @@ export function ConnectorView({ connector, getPinState, selectedPinNumber, onSel
           )}
         </g>
 
-        {/* Wires (behind pins) */}
-        <g transform={`translate(${svgPadding}, ${svgPadding})`}>
-          {positions.map(({ pinNumber, x, y }) => {
-            const state = getPinState(pinNumber)
-            const color = state?.color ?? '#6c757d'
-            return (
-              <line
-                key={`wire-${pinNumber}`}
-                className="pin-wire"
-                x1={x}
-                y1={y}
-                x2={x + WIRE_LENGTH}
-                y2={y}
-                stroke={color}
-                strokeWidth="4"
-                strokeLinecap="round"
-              />
-            )
-          })}
-        </g>
-
-        {/* Pins: circle in a zoom wrapper so hover only zooms from pin center */}
+        {/* Pins */}
         <g transform={`translate(${svgPadding}, ${svgPadding})`}>
           {positions.map(({ pinNumber, x, y }) => {
             const state = getPinState(pinNumber)
@@ -175,7 +165,7 @@ export function ConnectorView({ connector, getPinState, selectedPinNumber, onSel
                     style={{
                       width: 72,
                       marginLeft: row === 0 ? 0 : 12,
-                      color: state?.color ?? '#6c757d',
+                      color: getLabelColor(state?.color ?? '#6c757d'),
                     }}
                   >
                     <span className="pin-label-num">{pinNumber}</span>
