@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useId, useMemo } from 'react'
 import { COLOR_PRESETS } from '../connectors/config'
 import './PinSidePanel.css'
 
-export function PinSidePanel({
+const DEFAULT_COLOR = '#6c757d'
+
+function PinSidePanelImpl({
   pinNumber,
   pinState,
   onUpdatePin,
@@ -16,15 +18,24 @@ export function PinSidePanel({
   onAddLink,
   onRemoveLink,
 }) {
-  const [label, setLabel] = useState(pinState?.label ?? '')
-  const [color, setColor] = useState(pinState?.color ?? '#6c757d')
-  const [presetId, setPresetId] = useState(pinState?.presetId ?? 'unassigned')
+  // Pull out primitive fields so the sync effect only re-runs on actual value
+  // changes (not on every parent rerender that creates a new pinState object).
+  const externalLabel = pinState?.label ?? ''
+  const externalColor = pinState?.color ?? DEFAULT_COLOR
+  const externalPresetId = pinState?.presetId ?? 'unassigned'
 
+  const [label, setLabel] = useState(externalLabel)
+  const [color, setColor] = useState(externalColor)
+  const [presetId, setPresetId] = useState(externalPresetId)
+
+  // Sync external -> local only on actual primitive changes or when the selected
+  // pin/connector context changes. This prevents in-progress edits from being
+  // overwritten by an identical-valued rerender.
   useEffect(() => {
-    setLabel(pinState?.label ?? '')
-    setColor(pinState?.color ?? '#6c757d')
-    setPresetId(pinState?.presetId ?? 'unassigned')
-  }, [pinNumber, pinState])
+    setLabel(externalLabel)
+    setColor(externalColor)
+    setPresetId(externalPresetId)
+  }, [pinNumber, connectorIndex, externalLabel, externalColor, externalPresetId])
 
   const applyPreset = (preset) => {
     setPresetId(preset.id)
@@ -35,8 +46,17 @@ export function PinSidePanel({
 
   const handleLabelBlur = () => {
     const trimmed = label.trim() || `Pin ${pinNumber}`
-    setLabel(trimmed)
-    onUpdatePin(pinNumber, { label: trimmed })
+    if (trimmed !== label) setLabel(trimmed)
+    if (trimmed !== externalLabel) onUpdatePin(pinNumber, { label: trimmed })
+  }
+
+  const handleLabelKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur()
+    } else if (e.key === 'Escape') {
+      setLabel(externalLabel)
+      e.currentTarget.blur()
+    }
   }
 
   const handleColorChange = (e) => {
@@ -46,14 +66,26 @@ export function PinSidePanel({
     onUpdatePin(pinNumber, { color: value, presetId: '' })
   }
 
+  const handleHexBlur = () => {
+    if (color !== externalColor) {
+      onUpdatePin(pinNumber, { color, presetId: presetId || undefined })
+    }
+  }
+
   const handleReset = () => {
     onResetPin(pinNumber)
     onClose()
   }
 
-  if (pinNumber == null) return null
+  const labelId = useId()
+  const colorId = useId()
 
-  const pinTitle = connectorIndex != null ? `Connector ${connectorIndex + 1} — Pin ${pinNumber}` : `Pin ${pinNumber}`
+  const pinTitle = useMemo(
+    () => (connectorIndex != null ? `Connector ${connectorIndex + 1} — Pin ${pinNumber}` : `Pin ${pinNumber}`),
+    [connectorIndex, pinNumber]
+  )
+
+  if (pinNumber == null) return null
 
   return (
     <div className="pin-side-panel">
@@ -66,13 +98,14 @@ export function PinSidePanel({
 
       <div className="pin-side-panel-body">
         <div className="pin-side-panel-field">
-          <label htmlFor="pin-label">Label</label>
+          <label htmlFor={labelId}>Label</label>
           <input
-            id="pin-label"
+            id={labelId}
             type="text"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             onBlur={handleLabelBlur}
+            onKeyDown={handleLabelKeyDown}
             placeholder={`Pin ${pinNumber}`}
             className="pin-side-panel-input"
           />
@@ -89,6 +122,8 @@ export function PinSidePanel({
                 style={{ '--preset-color': preset.color }}
                 onClick={() => applyPreset(preset)}
                 title={preset.description}
+                aria-pressed={presetId === preset.id}
+                aria-label={`Apply preset ${preset.label}`}
               >
                 {preset.label}
               </button>
@@ -97,10 +132,10 @@ export function PinSidePanel({
         </div>
 
         <div className="pin-side-panel-field">
-          <label htmlFor="pin-color">Custom color</label>
+          <label htmlFor={colorId}>Custom color</label>
           <div className="pin-color-row">
             <input
-              id="pin-color"
+              id={colorId}
               type="color"
               value={color}
               onChange={handleColorChange}
@@ -110,8 +145,9 @@ export function PinSidePanel({
               type="text"
               value={color}
               onChange={(e) => setColor(e.target.value)}
-              onBlur={() => onUpdatePin(pinNumber, { color, presetId: presetId || undefined })}
+              onBlur={handleHexBlur}
               className="pin-color-hex"
+              aria-label="Custom color hex value"
             />
           </div>
         </div>
@@ -168,3 +204,5 @@ export function PinSidePanel({
     </div>
   )
 }
+
+export const PinSidePanel = React.memo(PinSidePanelImpl)

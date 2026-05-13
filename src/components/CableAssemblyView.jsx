@@ -1,60 +1,50 @@
-import React from 'react'
+import React, { useMemo, useCallback } from 'react'
 import {
   getPinPositions,
   getConnectorBounds,
   WIRE_LENGTH,
   PIN_RADIUS,
 } from '../connectors/connectorGeometry'
+import { getLabelColor } from '../utils/colorUtils'
 import './CableAssemblyView.css'
 
 const PAD = 60
 const CABLE_GAP = 80
 
-/** Return a readable text color for dark backgrounds when wire color is too dark */
-function getLabelColor(wireColor) {
-  if (!wireColor) return 'var(--text-muted)'
-  let hex = wireColor.replace(/^#/, '')
-  if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
-  const r = parseInt(hex.slice(0, 2), 16) / 255
-  const g = parseInt(hex.slice(2, 4), 16) / 255
-  const b = parseInt(hex.slice(4, 6), 16) / 255
-  const luminance = 0.299 * r + 0.587 * g + 0.114 * b
-  return luminance < 0.4 ? '#e0e0e0' : wireColor
-}
-
 function ConnectorBlock({
   connector,
-  getPinState,
+  getPinStateAt,
   selectedPinNumber,
   onSelectPin,
+  onPinKeyDown,
   baseX,
   baseY,
   connectorIndex,
   defsId,
 }) {
-  if (!connector) return null
+  // Memoize per-connector geometry to avoid rebuilding on unrelated re-renders.
+  const geometry = useMemo(() => {
+    if (!connector) return null
+    const positions = getPinPositions(connector)
+    const bounds = getConnectorBounds(connector)
+    const shape = connector.shape ?? 'dsub'
+    let trianglePath = null
+    if (shape === 'power3Triangle' && positions.length === 3) {
+      const cx = positions.reduce((s, p) => s + p.x, 0) / 3
+      const cy = positions.reduce((s, p) => s + p.y, 0) / 3
+      const r = Math.max(...positions.map((p) => Math.hypot(p.x - cx, p.y - cy))) + 14
+      const angles = [-90, 150, 30].map((deg) => (deg * Math.PI) / 180)
+      const verts = angles.map((a) => ({
+        x: cx + r * Math.cos(a) - bounds.x,
+        y: cy + r * Math.sin(a) - bounds.y,
+      }))
+      trianglePath = `M ${verts[0].x} ${verts[0].y} L ${verts[1].x} ${verts[1].y} L ${verts[2].x} ${verts[2].y} Z`
+    }
+    return { positions, bounds, shape, trianglePath }
+  }, [connector])
 
-  const positions = getPinPositions(connector)
-  const bounds = getConnectorBounds(connector)
-  const shape = connector.shape ?? 'dsub'
-
-  const blockWidth = bounds.width + PAD * 2 + WIRE_LENGTH
-  const blockHeight = bounds.height + PAD * 2
-
-  const trianglePath =
-    shape === 'power3Triangle' && positions.length === 3
-      ? (() => {
-          const cx = positions.reduce((s, p) => s + p.x, 0) / 3
-          const cy = positions.reduce((s, p) => s + p.y, 0) / 3
-          const r = Math.max(...positions.map((p) => Math.hypot(p.x - cx, p.y - cy))) + 14
-          const angles = [-90, 150, 30].map((deg) => (deg * Math.PI) / 180)
-          const verts = angles.map((a) => ({
-            x: cx + r * Math.cos(a) - bounds.x,
-            y: cy + r * Math.sin(a) - bounds.y,
-          }))
-          return `M ${verts[0].x} ${verts[0].y} L ${verts[1].x} ${verts[1].y} L ${verts[2].x} ${verts[2].y} Z`
-        })()
-      : null
+  if (!geometry) return null
+  const { positions, bounds, shape, trianglePath } = geometry
 
   return (
     <g transform={`translate(${baseX}, ${baseY})`}>
@@ -122,16 +112,23 @@ function ConnectorBlock({
       {/* Pins */}
       <g transform={`translate(${PAD}, ${PAD})`}>
         {positions.map(({ pinNumber, x, y }) => {
-          const state = getPinState(pinNumber)
+          const state = getPinStateAt(connectorIndex, pinNumber)
           const color = state?.color ?? '#6c757d'
-          const isSelected = selectedPinNumber?.pinNumber === pinNumber && selectedPinNumber?.connectorIndex === connectorIndex
+          const label = state?.label ?? `Pin ${pinNumber}`
+          const isSelected =
+            selectedPinNumber?.pinNumber === pinNumber &&
+            selectedPinNumber?.connectorIndex === connectorIndex
           return (
             <g
               key={pinNumber}
               className="pin-group"
               transform={`translate(${x}, ${y})`}
               onClick={() => onSelectPin(connectorIndex, pinNumber)}
-              style={{ cursor: 'pointer' }}
+              onKeyDown={(e) => onPinKeyDown(e, connectorIndex, pinNumber)}
+              role="button"
+              tabIndex={0}
+              aria-label={`Connector ${connectorIndex + 1}, Pin ${pinNumber}: ${label}`}
+              aria-pressed={isSelected}
             >
               <g className="pin-zoom">
                 <circle
@@ -162,41 +159,58 @@ function ConnectorBlock({
   )
 }
 
-export function CableAssemblyView({
+const MemoConnectorBlock = React.memo(ConnectorBlock)
+
+function CableAssemblyViewImpl({
   connectors,
   getPinStateAt,
   pinLinks,
   selectedPin,
   onSelectPin,
 }) {
-  if (!connectors || connectors.length === 0) return null
+  // Memoize layout based on connector identities only; ignores pin updates.
+  const layout = useMemo(() => {
+    if (!connectors || connectors.length === 0) return null
+    const blockWidths = connectors.map((c) => {
+      if (!c) return PAD * 2 + WIRE_LENGTH
+      const bounds = getConnectorBounds(c)
+      return bounds.width + PAD * 2 + WIRE_LENGTH
+    })
+    const blockHeights = connectors.map((c) => {
+      if (!c) return PAD * 2
+      const bounds = getConnectorBounds(c)
+      return bounds.height + PAD * 2
+    })
+    const totalWidth =
+      blockWidths.reduce((a, b) => a + b, 0) + CABLE_GAP * (connectors.length - 1)
+    const totalHeight = Math.max(...blockHeights, 1)
+    let x = 0
+    const blockPositions = connectors.map((_, i) => {
+      const pos = x
+      x += blockWidths[i] + (i < connectors.length - 1 ? CABLE_GAP : 0)
+      return pos
+    })
+    // Per-connector pin position cache (geometry depends only on connector type).
+    const positionsByIndex = connectors.map((c) => (c ? getPinPositions(c) : []))
+    return { blockWidths, blockHeights, totalWidth, totalHeight, blockPositions, positionsByIndex }
+  }, [connectors])
 
-  const blockWidths = connectors.map((c) => {
-    if (!c) return PAD * 2 + WIRE_LENGTH
-    const bounds = getConnectorBounds(c)
-    return bounds.width + PAD * 2 + WIRE_LENGTH
-  })
+  const handlePinKey = useCallback(
+    (e, connectorIndex, pinNumber) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        onSelectPin(connectorIndex, pinNumber)
+      }
+    },
+    [onSelectPin]
+  )
 
-  const blockHeights = connectors.map((c) => {
-    if (!c) return PAD * 2
-    const bounds = getConnectorBounds(c)
-    return bounds.height + PAD * 2
-  })
-
-  const totalWidth = blockWidths.reduce((a, b) => a + b, 0) + CABLE_GAP * (connectors.length - 1)
-  const totalHeight = Math.max(...blockHeights, 1)
-
-  let x = 0
-  const blockPositions = connectors.map((_, i) => {
-    const pos = x
-    x += blockWidths[i] + (i < connectors.length - 1 ? CABLE_GAP : 0)
-    return pos
-  })
+  if (!layout) return null
+  const { blockWidths, totalWidth, totalHeight, blockPositions, positionsByIndex } = layout
 
   const getWireEnd = (connectorIndex, pinNumber, towardRight) => {
-    const conn = connectors[connectorIndex]
-    if (!conn) return null
-    const positions = getPinPositions(conn)
+    const positions = positionsByIndex[connectorIndex]
+    if (!positions) return null
     const pos = positions.find((p) => p.pinNumber === pinNumber)
     if (!pos) return null
     const baseX = blockPositions[connectorIndex]
@@ -214,6 +228,7 @@ export function CableAssemblyView({
     seen.add(canon)
     const [ci, pn] = key.split(':').map(Number)
     const [cj, pn2] = String(value).split(':').map(Number)
+    if (ci >= connectors.length || cj >= connectors.length) return
     const leftIdx = Math.min(ci, cj)
     const rightIdx = Math.max(ci, cj)
     const start = leftIdx === ci ? getWireEnd(ci, pn, true) : getWireEnd(cj, pn2, true)
@@ -246,11 +261,12 @@ export function CableAssemblyView({
 
         {connectors.map((conn, i) => (
           <React.Fragment key={i}>
-            <ConnectorBlock
+            <MemoConnectorBlock
               connector={conn}
-              getPinState={(pn) => getPinStateAt(i, pn)}
+              getPinStateAt={getPinStateAt}
               selectedPinNumber={selectedPin}
               onSelectPin={onSelectPin}
+              onPinKeyDown={handlePinKey}
               baseX={blockPositions[i]}
               baseY={0}
               connectorIndex={i}
@@ -276,7 +292,7 @@ export function CableAssemblyView({
       <div className="cable-assembly-labels">
         {connectors.map((conn, i) => {
           if (!conn) return null
-          const positions = getPinPositions(conn)
+          const positions = positionsByIndex[i]
           return (
             <div key={i} className="cable-connector-labels">
               <span className="cable-connector-name">Connector {i + 1}</span>
@@ -307,3 +323,5 @@ export function CableAssemblyView({
     </div>
   )
 }
+
+export const CableAssemblyView = React.memo(CableAssemblyViewImpl)

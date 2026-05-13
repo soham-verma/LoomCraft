@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useConnectorState } from './useConnectorState'
 import { CONNECTOR_TYPES, DB25_HYP_SEED_CONFIG } from '../connectors/config'
 
 const CABLE_STORAGE_KEY = 'connector-cable-assembly'
 const STORAGE_KEY = 'connector-pin-tool'
+const PERSIST_DEBOUNCE_MS = 200
 
 function loadMainStorage() {
   try {
@@ -25,7 +26,10 @@ function persistSavedConfigs(configs) {
     const data = loadMainStorage()
     data.savedConfigs = configs
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-  } catch (_) {}
+    return null
+  } catch (err) {
+    return err instanceof Error ? err : new Error('Storage write failed')
+  }
 }
 
 let db25HypSeeded = false
@@ -51,7 +55,10 @@ function loadCableState() {
 function saveCableState(state) {
   try {
     localStorage.setItem(CABLE_STORAGE_KEY, JSON.stringify(state))
-  } catch (_) {}
+    return null
+  } catch (err) {
+    return err instanceof Error ? err : new Error('Storage write failed')
+  }
 }
 
 function getDefaultPinOverrides(connector) {
@@ -64,21 +71,65 @@ function getDefaultPinOverrides(connector) {
   )
 }
 
-/** Migrate A/B pinLinks to 0/1 format */
+/**
+ * Migrate legacy A:/B: pinLinks (and stray non-string values) to the canonical
+ * "ci:pn" -> "cj:pn2" string-pair format.
+ */
 function migratePinLinks(links) {
   if (!links || typeof links !== 'object') return {}
   const next = {}
   Object.entries(links).forEach(([key, value]) => {
     const k = key.replace(/^A:/, '0:').replace(/^B:/, '1:')
     if (typeof value === 'number') {
-      next[k] = `1:${value}`
-      if (key.startsWith('A:')) next[`1:${value}`] = `0:${key.slice(2)}`
-      else if (key.startsWith('B:')) next[`0:${value}`] = `1:${key.slice(2)}`
+      const targetSide = key.startsWith('A:') ? '1' : key.startsWith('B:') ? '0' : null
+      if (targetSide == null) return
+      const targetKey = `${targetSide}:${value}`
+      next[k] = targetKey
+      next[targetKey] = k
     } else if (typeof value === 'string' && value.includes(':')) {
       next[k] = value
-      const [ci, pn] = value.split(':')
       next[value] = k
     }
+  })
+  return next
+}
+
+function sanitizeCableConnectors(arr) {
+  if (!Array.isArray(arr)) return null
+  return arr.map((c) => ({
+    connectorTypeId: c?.connectorTypeId && CONNECTOR_TYPES[c.connectorTypeId] ? c.connectorTypeId : 'DB9',
+    pinOverrides: c?.pinOverrides && typeof c.pinOverrides === 'object' ? c.pinOverrides : {},
+  }))
+}
+
+/**
+ * Drop any links that reference an out-of-bounds connector index, an unknown
+ * connector type, or a pin number outside the connector's range. Also drops
+ * self-links and asymmetric pairs.
+ */
+function sanitizeLinks(links, baseConnectorTypeId, cableConnectors) {
+  if (!links || typeof links !== 'object') return {}
+  const totals = []
+  const baseConn = baseConnectorTypeId ? CONNECTOR_TYPES[baseConnectorTypeId] : null
+  totals.push(baseConn?.totalPins ?? 0)
+  for (const c of cableConnectors) {
+    const conn = c?.connectorTypeId ? CONNECTOR_TYPES[c.connectorTypeId] : null
+    totals.push(conn?.totalPins ?? 0)
+  }
+  const isValid = (ci, pn) => Number.isFinite(ci) && ci >= 0 && ci < totals.length && pn >= 1 && pn <= totals[ci]
+
+  const next = {}
+  Object.entries(links).forEach(([k, v]) => {
+    if (typeof k !== 'string' || typeof v !== 'string' || !v.includes(':')) return
+    const [ci, pn] = k.split(':').map(Number)
+    const [cj, pn2] = v.split(':').map(Number)
+    if (!isValid(ci, pn) || !isValid(cj, pn2)) return
+    if (ci === cj && pn === pn2) return
+    next[k] = v
+  })
+  // Ensure bidirectional consistency: every link points back to itself.
+  Object.entries({ ...next }).forEach(([k, v]) => {
+    if (next[v] !== k) next[v] = k
   })
   return next
 }
@@ -90,83 +141,119 @@ function migratePinLinks(links) {
 export function useCableAssemblyState() {
   seedDb25HypConfigIfNeeded()
   const base = useConnectorState()
+  // Destructure stable callback identities so we don't put the whole `base`
+  // object (a fresh reference each render) into other useCallback deps.
+  const {
+    setConnectorTypeId,
+    applyConnectorConfig,
+    refreshSavedConfigs,
+    connector: baseConnector,
+    saveAsConfig: baseSaveAsConfig,
+    loadConfig: baseLoadConfig,
+    exportToFile: baseExportToFile,
+    importFromFile: baseImportFromFile,
+    getPinState: baseGetPinState,
+    updatePin: baseUpdatePin,
+    resetPin: baseResetPin,
+    resetAllPins: baseResetAllPins,
+    storageError: baseStorageError,
+    clearStorageError,
+  } = base
 
   const [cableConnectors, setCableConnectors] = useState(() => {
     const saved = loadCableState()
-    const arr = saved.connectors
-    if (Array.isArray(arr) && arr.length >= 1) {
-      return arr.map((c) => ({
-        connectorTypeId: c?.connectorTypeId && CONNECTOR_TYPES[c.connectorTypeId] ? c.connectorTypeId : 'DB9',
-        pinOverrides: c?.pinOverrides && typeof c.pinOverrides === 'object' ? c.pinOverrides : {},
-      }))
-    }
+    const sanitized = sanitizeCableConnectors(saved.connectors)
+    if (sanitized && sanitized.length >= 1) return sanitized
     if (saved.connectorTypeIdB && CONNECTOR_TYPES[saved.connectorTypeIdB]) {
       const overrides = saved.connectorB?.[saved.connectorTypeIdB]?.pinOverrides
-      return [{ connectorTypeId: saved.connectorTypeIdB, pinOverrides: overrides && typeof overrides === 'object' ? overrides : {} }]
+      return [{
+        connectorTypeId: saved.connectorTypeIdB,
+        pinOverrides: overrides && typeof overrides === 'object' ? overrides : {},
+      }]
     }
-    return [
-      { connectorTypeId: 'DB9', pinOverrides: {} },
-    ]
+    return [{ connectorTypeId: 'DB9', pinOverrides: {} }]
   })
 
   const [pinLinks, setPinLinks] = useState(() => {
     const saved = loadCableState()
     const links = saved.pinLinks && typeof saved.pinLinks === 'object' ? saved.pinLinks : {}
-    return migratePinLinks(links)
+    const migrated = migratePinLinks(links)
+    const main = loadMainStorage()
+    const baseTypeId = main.lastConnector && CONNECTOR_TYPES[main.lastConnector] ? main.lastConnector : 'DB25'
+    const cableArr = sanitizeCableConnectors(saved.connectors) ?? []
+    return sanitizeLinks(migrated, baseTypeId, cableArr)
   })
 
-  const [selectedCablePin, setSelectedCablePin] = useState(null) // { connectorIndex: number, pinNumber: number }
+  const [selectedCablePin, setSelectedCablePin] = useState(null)
+  const [cableStorageError, setCableStorageError] = useState(null)
 
-  const cableConnectorTypes = cableConnectors.map((c) => CONNECTOR_TYPES[c.connectorTypeId])
+  // Memoize derived list of resolved connector types for consumers.
+  const cableConnectorTypes = useMemo(
+    () => cableConnectors.map((c) => CONNECTOR_TYPES[c.connectorTypeId] ?? null),
+    [cableConnectors]
+  )
 
   const getConnector = useCallback(
     (index) => {
-      if (index === 0) return base.connector
+      if (index === 0) return baseConnector
       const c = cableConnectors[index - 1]
-      return c ? CONNECTOR_TYPES[c.connectorTypeId] : null
+      return c ? CONNECTOR_TYPES[c.connectorTypeId] ?? null : null
     },
-    [base.connector, cableConnectors]
+    [baseConnector, cableConnectors]
   )
 
   const getPinStateAt = useCallback(
     (connectorIndex, pinNumber) => {
-      if (connectorIndex === 0) return base.getPinState(pinNumber)
+      if (connectorIndex === 0) return baseGetPinState(pinNumber)
       const c = cableConnectors[connectorIndex - 1]
       if (!c) return { label: `Pin ${pinNumber}`, color: '#6c757d', presetId: 'unassigned' }
+      const override = c.pinOverrides[pinNumber]
+      if (override) return override
       const conn = CONNECTOR_TYPES[c.connectorTypeId]
-      if (c.pinOverrides[pinNumber]) return c.pinOverrides[pinNumber]
       const label = conn?.defaultLabels?.[pinNumber] ?? `Pin ${pinNumber}`
       return { label, color: '#6c757d', presetId: 'unassigned' }
     },
-    [base, cableConnectors]
+    [baseGetPinState, cableConnectors]
   )
 
   const updatePinAt = useCallback(
     (connectorIndex, pinNumber, updates) => {
-      if (connectorIndex === 0) return base.updatePin(pinNumber, updates)
+      if (connectorIndex === 0) return baseUpdatePin(pinNumber, updates)
       setCableConnectors((prev) => {
-        const next = [...prev]
         const idx = connectorIndex - 1
-        if (!next[idx]) return prev
-        next[idx] = { ...next[idx], pinOverrides: { ...next[idx].pinOverrides, [pinNumber]: { ...next[idx].pinOverrides[pinNumber], ...updates } } }
+        const target = prev[idx]
+        if (!target) return prev
+        const next = [...prev]
+        next[idx] = {
+          ...target,
+          pinOverrides: {
+            ...target.pinOverrides,
+            [pinNumber]: { ...target.pinOverrides[pinNumber], ...updates },
+          },
+        }
         return next
       })
     },
-    [base]
+    [baseUpdatePin]
   )
 
-  const setConnectorTypeAt = useCallback((connectorIndex, connectorTypeId) => {
-    if (connectorIndex === 0) return base.setConnectorTypeId(connectorTypeId)
-    setCableConnectors((prev) => {
-      const next = [...prev]
-      const idx = connectorIndex - 1
-      if (!next[idx]) return prev
-      const conn = CONNECTOR_TYPES[connectorTypeId]
-      const baseDefaults = conn ? getDefaultPinOverrides(conn) : {}
-      next[idx] = { connectorTypeId, pinOverrides: baseDefaults }
-      return next
-    })
-  }, [base])
+  const setConnectorTypeAt = useCallback(
+    (connectorIndex, connectorTypeId) => {
+      if (connectorIndex === 0) return setConnectorTypeId(connectorTypeId)
+      setCableConnectors((prev) => {
+        const idx = connectorIndex - 1
+        if (!prev[idx]) return prev
+        const next = [...prev]
+        const conn = CONNECTOR_TYPES[connectorTypeId]
+        const baseDefaults = conn ? getDefaultPinOverrides(conn) : {}
+        next[idx] = { connectorTypeId, pinOverrides: baseDefaults }
+        return next
+      })
+      // When the type changes, drop any links targeting now-invalid pin numbers.
+      setPinLinks((prev) => pruneLinksForConnector(prev, connectorIndex, CONNECTOR_TYPES[connectorTypeId]))
+    },
+    [setConnectorTypeId]
+  )
 
   const addConnector = useCallback(() => {
     setCableConnectors((prev) => [...prev, { connectorTypeId: 'DB9', pinOverrides: {} }])
@@ -176,31 +263,9 @@ export function useCableAssemblyState() {
     if (connectorIndex === 0) return
     setCableConnectors((prev) => {
       if (prev.length <= 1) return prev
-      const next = prev.filter((_, i) => i !== connectorIndex - 1)
-      return next
+      return prev.filter((_, i) => i !== connectorIndex - 1)
     })
-    setPinLinks((prev) => {
-      const pairs = []
-      const seen = new Set()
-      Object.entries(prev).forEach(([k, v]) => {
-        const canon = [k, v].sort().join('|')
-        if (seen.has(canon)) return
-        seen.add(canon)
-        const ci = parseInt(k.split(':')[0], 10)
-        const cj = parseInt(String(v).split(':')[0], 10)
-        if (ci === connectorIndex || cj === connectorIndex) return
-        const [pn, pn2] = [k.split(':')[1], String(v).split(':')[1]]
-        const newCi = ci > connectorIndex ? ci - 1 : ci
-        const newCj = cj > connectorIndex ? cj - 1 : cj
-        pairs.push([`${newCi}:${pn}`, `${newCj}:${pn2}`])
-      })
-      const next = {}
-      pairs.forEach(([a, b]) => {
-        next[a] = b
-        next[b] = a
-      })
-      return next
-    })
+    setPinLinks((prev) => removeAndShiftLinks(prev, connectorIndex))
     setSelectedCablePin(null)
   }, [])
 
@@ -245,97 +310,137 @@ export function useCableAssemblyState() {
 
   const resetAllPinsAt = useCallback(
     (connectorIndex) => {
-      if (connectorIndex === 0) return base.resetAllPins()
-      const c = cableConnectors[connectorIndex - 1]
-      if (!c) return
-      const conn = CONNECTOR_TYPES[c.connectorTypeId]
-      if (!conn) return
+      if (connectorIndex === 0) return baseResetAllPins()
       setCableConnectors((prev) => {
+        const c = prev[connectorIndex - 1]
+        if (!c) return prev
+        const conn = CONNECTOR_TYPES[c.connectorTypeId]
+        if (!conn) return prev
         const next = [...prev]
-        next[connectorIndex - 1] = { ...next[connectorIndex - 1], pinOverrides: getDefaultPinOverrides(conn) }
+        next[connectorIndex - 1] = { ...c, pinOverrides: getDefaultPinOverrides(conn) }
         return next
       })
     },
-    [base, cableConnectors]
+    [baseResetAllPins]
   )
 
   const resetPinAt = useCallback(
     (connectorIndex, pinNumber) => {
-      if (connectorIndex === 0) return base.resetPin(pinNumber)
-      const c = cableConnectors[connectorIndex - 1]
-      const conn = CONNECTOR_TYPES[c?.connectorTypeId]
-      if (!conn) return
-      const def = conn.defaultLabels?.[pinNumber] ?? `Pin ${pinNumber}`
-      updatePinAt(connectorIndex, pinNumber, { label: def, color: '#6c757d', presetId: 'unassigned' })
+      if (connectorIndex === 0) return baseResetPin(pinNumber)
+      setCableConnectors((prev) => {
+        const c = prev[connectorIndex - 1]
+        if (!c) return prev
+        const conn = CONNECTOR_TYPES[c.connectorTypeId]
+        const def = conn?.defaultLabels?.[pinNumber] ?? `Pin ${pinNumber}`
+        const next = [...prev]
+        next[connectorIndex - 1] = {
+          ...c,
+          pinOverrides: {
+            ...c.pinOverrides,
+            [pinNumber]: { label: def, color: '#6c757d', presetId: 'unassigned' },
+          },
+        }
+        return next
+      })
     },
-    [base, cableConnectors, updatePinAt]
+    [baseResetPin]
   )
 
+  // Debounced persistence of cable state.
   useEffect(() => {
-    const saved = loadCableState()
-    saved.connectors = cableConnectors.map((c) => ({ connectorTypeId: c.connectorTypeId, pinOverrides: c.pinOverrides }))
-    saved.pinLinks = pinLinks
-    saveCableState(saved)
+    const handle = setTimeout(() => {
+      const payload = {
+        connectors: cableConnectors.map((c) => ({ connectorTypeId: c.connectorTypeId, pinOverrides: c.pinOverrides })),
+        pinLinks,
+      }
+      const err = saveCableState(payload)
+      if (err) setCableStorageError(err.message || 'Failed to save cable assembly')
+    }, PERSIST_DEBOUNCE_MS)
+    return () => clearTimeout(handle)
   }, [cableConnectors, pinLinks])
+
+  /**
+   * Replace cable state from a config or an import payload.
+   * `baseTypeIdHint` lets callers (load/import) sanitize links against the
+   * incoming base connector type, since base state is updated in parallel.
+   */
+  const applyCableState = useCallback((next, baseTypeIdHint) => {
+    if (!next || typeof next !== 'object') {
+      setCableConnectors([{ connectorTypeId: 'DB9', pinOverrides: {} }])
+      setPinLinks({})
+      setSelectedCablePin(null)
+      return
+    }
+    const sanitized = sanitizeCableConnectors(next.connectors)
+    const cableArr = sanitized && sanitized.length >= 1
+      ? sanitized
+      : [{ connectorTypeId: 'DB9', pinOverrides: {} }]
+    setCableConnectors(cableArr)
+    const baseTypeId = baseTypeIdHint && CONNECTOR_TYPES[baseTypeIdHint] ? baseTypeIdHint : null
+    setPinLinks(sanitizeLinks(migratePinLinks(next.pinLinks), baseTypeId, cableArr))
+    setSelectedCablePin(null)
+  }, [])
 
   const saveAsConfig = useCallback(
     (name) => {
-      const trimmed = (name || '').trim()
-      if (!trimmed) return
-      const configs = loadSavedConfigs()
-      const newConfig = {
-        id: crypto.randomUUID?.() ?? `saved-${Date.now()}`,
-        name: trimmed,
-        connectorTypeId: base.connectorTypeId,
-        pinOverrides: { ...base.pinOverrides },
+      const extras = {
         cableConnectors: cableConnectors.map((c) => ({ connectorTypeId: c.connectorTypeId, pinOverrides: { ...c.pinOverrides } })),
         pinLinks: { ...pinLinks },
       }
-      configs.push(newConfig)
-      persistSavedConfigs(configs)
-      base.refreshSavedConfigs?.()
+      return baseSaveAsConfig(name, extras)
     },
-    [base.connectorTypeId, base.pinOverrides, base.refreshSavedConfigs, cableConnectors, pinLinks]
+    [baseSaveAsConfig, cableConnectors, pinLinks]
   )
 
   const loadConfig = useCallback(
     (id) => {
-      const configs = loadSavedConfigs()
-      const config = configs.find((c) => c.id === id)
-      if (!config) return
-      const connectorTypeId = config.connectorTypeId
-      const pinOverrides = config.pinOverrides ?? {}
-      const data = loadMainStorage()
-      const all = data.connectors ?? {}
-      all[connectorTypeId] = { pinOverrides }
-      data.connectors = all
-      data.lastConnector = connectorTypeId
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-      base.setConnectorTypeId(connectorTypeId)
-      if (Array.isArray(config.cableConnectors) && config.cableConnectors.length > 0) {
-        setCableConnectors(
-          config.cableConnectors.map((c) => ({
-            connectorTypeId: c?.connectorTypeId && CONNECTOR_TYPES[c.connectorTypeId] ? c.connectorTypeId : 'DB9',
-            pinOverrides: c?.pinOverrides && typeof c.pinOverrides === 'object' ? c.pinOverrides : {},
-          }))
+      const config = baseLoadConfig(id)
+      if (!config) return null
+      if (Array.isArray(config.cableConnectors)) {
+        applyCableState(
+          { connectors: config.cableConnectors, pinLinks: config.pinLinks },
+          config.connectorTypeId
         )
-        if (config.pinLinks && typeof config.pinLinks === 'object') {
-          setPinLinks(config.pinLinks)
-        }
       } else {
-        setCableConnectors([{ connectorTypeId: 'DB9', pinOverrides: {} }])
-        setPinLinks({})
+        applyCableState(null)
       }
-      setSelectedCablePin(null)
-      base.refreshSavedConfigs?.()
+      refreshSavedConfigs?.()
+      return config
     },
-    [base]
+    [baseLoadConfig, applyCableState, refreshSavedConfigs]
   )
+
+  const exportToFile = useCallback(() => {
+    baseExportToFile({
+      cableAssembly: {
+        connectors: cableConnectors.map((c) => ({ connectorTypeId: c.connectorTypeId, pinOverrides: c.pinOverrides })),
+        pinLinks,
+      },
+    })
+  }, [baseExportToFile, cableConnectors, pinLinks])
+
+  const importFromFile = useCallback(
+    (file) =>
+      baseImportFromFile(file, (data) => {
+        const cable = data?.cableAssembly && typeof data.cableAssembly === 'object' ? data.cableAssembly : null
+        const baseTypeIdHint = data?.lastConnector
+        applyCableState(cable, baseTypeIdHint)
+      }),
+    [baseImportFromFile, applyCableState]
+  )
+
+  const storageError = baseStorageError || cableStorageError
+  const clearAllStorageErrors = useCallback(() => {
+    clearStorageError()
+    setCableStorageError(null)
+  }, [clearStorageError])
 
   return {
     ...base,
     saveAsConfig,
     loadConfig,
+    exportToFile,
+    importFromFile,
     cableConnectors,
     cableConnectorTypes,
     getConnector,
@@ -352,5 +457,49 @@ export function useCableAssemblyState() {
     setSelectedCablePin,
     resetAllPinsAt,
     resetPinAt,
+    storageError,
+    clearStorageError: clearAllStorageErrors,
   }
+}
+
+/** Drop links that target invalid pin numbers on the given connector after a type change. */
+function pruneLinksForConnector(prev, connectorIndex, newConnector) {
+  if (!prev || typeof prev !== 'object') return {}
+  const max = newConnector?.totalPins ?? 0
+  const next = {}
+  Object.entries(prev).forEach(([k, v]) => {
+    const [ci, pn] = k.split(':').map(Number)
+    const [cj, pn2] = String(v).split(':').map(Number)
+    const involvesThis = ci === connectorIndex || cj === connectorIndex
+    if (!involvesThis) {
+      next[k] = v
+      return
+    }
+    const ourPin = ci === connectorIndex ? pn : pn2
+    if (ourPin >= 1 && ourPin <= max) next[k] = v
+  })
+  return next
+}
+
+/** Remove all links touching `connectorIndex` and shift remaining indices > connectorIndex down by 1. */
+function removeAndShiftLinks(prev, connectorIndex) {
+  const pairs = []
+  const seen = new Set()
+  Object.entries(prev).forEach(([k, v]) => {
+    const canon = [k, v].sort().join('|')
+    if (seen.has(canon)) return
+    seen.add(canon)
+    const [ci, pn] = k.split(':').map(Number)
+    const [cj, pn2] = String(v).split(':').map(Number)
+    if (ci === connectorIndex || cj === connectorIndex) return
+    const newCi = ci > connectorIndex ? ci - 1 : ci
+    const newCj = cj > connectorIndex ? cj - 1 : cj
+    pairs.push([`${newCi}:${pn}`, `${newCj}:${pn2}`])
+  })
+  const next = {}
+  pairs.forEach(([a, b]) => {
+    next[a] = b
+    next[b] = a
+  })
+  return next
 }

@@ -1,28 +1,36 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { getPinPositions, getConnectorBounds, PIN_RADIUS } from '../connectors/connectorGeometry'
+import { getLabelColor } from '../utils/colorUtils'
 import './ConnectorView.css'
 
-function getLabelColor(wireColor) {
-  if (!wireColor) return 'var(--text-muted)'
-  let hex = String(wireColor).replace(/^#/, '')
-  if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
-  const r = parseInt(hex.slice(0, 2), 16) / 255
-  const g = parseInt(hex.slice(2, 4), 16) / 255
-  const b = parseInt(hex.slice(4, 6), 16) / 255
-  const luminance = 0.299 * r + 0.587 * g + 0.114 * b
-  return luminance < 0.4 ? '#e0e0e0' : wireColor
-}
+const SVG_PADDING = 60
 
-export function ConnectorView({ connector, getPinState, selectedPinNumber, onSelectPin }) {
-  if (!connector) return null
+function ConnectorViewImpl({ connector, getPinState, selectedPinNumber, onSelectPin }) {
+  // Geometry only depends on the connector identity; memoize so we don't
+  // rebuild position arrays on every selection or pin update.
+  const { positions, bounds, width, height, shape } = useMemo(() => {
+    if (!connector) return { positions: [], bounds: null, width: 0, height: 0, shape: 'dsub' }
+    const positions = getPinPositions(connector)
+    const bounds = getConnectorBounds(connector)
+    return {
+      positions,
+      bounds,
+      width: bounds.width + SVG_PADDING * 2,
+      height: bounds.height + SVG_PADDING * 2,
+      shape: connector.shape ?? 'dsub',
+    }
+  }, [connector])
 
-  const positions = getPinPositions(connector)
-  const bounds = getConnectorBounds(connector)
-  const svgPadding = 60
-  const shape = connector.shape ?? 'dsub'
+  if (!connector || !bounds) return null
 
-  const width = bounds.width + svgPadding * 2
-  const height = bounds.height + svgPadding * 2
+  const svgPadding = SVG_PADDING
+
+  const handlePinKey = (e, pinNumber) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onSelectPin(pinNumber)
+    }
+  }
 
   // Triangle shell for 3-pin power: vertices in content coords, then to shell local
   const trianglePath =
@@ -113,6 +121,7 @@ export function ConnectorView({ connector, getPinState, selectedPinNumber, onSel
           {positions.map(({ pinNumber, x, y }) => {
             const state = getPinState(pinNumber)
             const color = state?.color ?? '#6c757d'
+            const label = state?.label ?? `Pin ${pinNumber}`
             const isSelected = selectedPinNumber === pinNumber
             return (
               <g
@@ -120,7 +129,11 @@ export function ConnectorView({ connector, getPinState, selectedPinNumber, onSel
                 className="pin-group"
                 transform={`translate(${x}, ${y})`}
                 onClick={() => onSelectPin(pinNumber)}
-                style={{ cursor: 'pointer' }}
+                onKeyDown={(e) => handlePinKey(e, pinNumber)}
+                role="button"
+                tabIndex={0}
+                aria-label={`Pin ${pinNumber}: ${label}`}
+                aria-pressed={isSelected}
               >
                 <g className="pin-zoom">
                   <circle
@@ -150,12 +163,12 @@ export function ConnectorView({ connector, getPinState, selectedPinNumber, onSel
       </svg>
 
       {/* Pin labels in two rows matching connector layout */}
-      <div className="connector-labels" style={{ width: width, maxWidth: '100%' }}>
+      <div className="connector-labels">
         {[0, 1].map((row) => (
           <div key={row} className="pin-label-row">
             {positions
               .filter((p) => p.row === row)
-              .map(({ pinNumber, x }) => {
+              .map(({ pinNumber }) => {
                 const state = getPinState(pinNumber)
                 const label = state?.label ?? `Pin ${pinNumber}`
                 return (
@@ -163,7 +176,6 @@ export function ConnectorView({ connector, getPinState, selectedPinNumber, onSel
                     key={pinNumber}
                     className="pin-label-item"
                     style={{
-                      width: 72,
                       marginLeft: row === 0 ? 0 : 12,
                       color: getLabelColor(state?.color ?? '#6c757d'),
                     }}
@@ -179,3 +191,5 @@ export function ConnectorView({ connector, getPinState, selectedPinNumber, onSel
     </div>
   )
 }
+
+export const ConnectorView = React.memo(ConnectorViewImpl)

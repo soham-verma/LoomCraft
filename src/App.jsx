@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { useCableAssemblyState } from './hooks/useCableAssemblyState'
 import { CONNECTOR_GROUPS } from './connectors/config'
 import { ConnectorView } from './components/ConnectorView'
@@ -27,7 +27,6 @@ export default function App() {
     importFromFile,
     cableConnectors,
     cableConnectorTypes,
-    getConnector,
     getPinStateAt,
     updatePinAt,
     setConnectorTypeAt,
@@ -41,6 +40,8 @@ export default function App() {
     setSelectedCablePin,
     resetAllPinsAt,
     resetPinAt,
+    storageError,
+    clearStorageError,
   } = useCableAssemblyState()
 
   const [mode, setMode] = useState('single')
@@ -53,14 +54,31 @@ export default function App() {
   const isCableMode = mode === 'cable'
   const selectedPin = isCableMode ? selectedCablePin : selectedPinNumber
 
-  const cableConnectorsList = [connector, ...cableConnectorTypes.filter(Boolean)]
+  // Build the cable list once, preserving indices (no filter that could skew links).
+  // Connector 0 is the base; entries 1..N come from `cableConnectorTypes` and may be null
+  // if a connector type is unknown (renderers handle null gracefully).
+  const cableConnectorsList = useMemo(
+    () => [connector, ...cableConnectorTypes],
+    [connector, cableConnectorTypes]
+  )
 
-  const selectedPinState =
-    selectedPin != null
-      ? typeof selectedPin === 'object'
-        ? getPinStateAt(selectedPin.connectorIndex, selectedPin.pinNumber)
-        : getPinState(selectedPin)
-      : null
+  const selectedPinState = useMemo(() => {
+    if (selectedPin == null) return null
+    if (typeof selectedPin === 'object') {
+      return getPinStateAt(selectedPin.connectorIndex, selectedPin.pinNumber)
+    }
+    return getPinState(selectedPin)
+  }, [selectedPin, getPinStateAt, getPinState])
+
+  const otherConnectorsForPanel = useMemo(() => {
+    if (!selectedPin || typeof selectedPin !== 'object') return null
+    return cableConnectorsList.filter((_, i) => i !== selectedPin.connectorIndex)
+  }, [cableConnectorsList, selectedPin])
+
+  const otherConnectorIndices = useMemo(() => {
+    if (!selectedPin || typeof selectedPin !== 'object') return null
+    return cableConnectorsList.map((_, i) => i).filter((i) => i !== selectedPin.connectorIndex)
+  }, [cableConnectorsList, selectedPin])
 
   const handleSaveAs = () => {
     if (saveName.trim()) {
@@ -96,6 +114,35 @@ export default function App() {
     cableConnectorsList.forEach((_, i) => resetAllPinsAt(i))
   }
 
+  const handleSelectCablePin = useCallback(
+    (connectorIndex, pinNumber) => setSelectedCablePin({ connectorIndex, pinNumber }),
+    [setSelectedCablePin]
+  )
+
+  const handleUpdateSelectedPin = useCallback(
+    (_pinNum, updates) => {
+      if (typeof selectedPin === 'object' && selectedPin) {
+        updatePinAt(selectedPin.connectorIndex, selectedPin.pinNumber, updates)
+      } else if (selectedPin != null) {
+        updatePin(selectedPin, updates)
+      }
+    },
+    [selectedPin, updatePinAt, updatePin]
+  )
+
+  const handleResetSelectedPin = useCallback(() => {
+    if (typeof selectedPin === 'object' && selectedPin) {
+      resetPinAt(selectedPin.connectorIndex, selectedPin.pinNumber)
+    } else if (selectedPin != null) {
+      resetPin(selectedPin)
+    }
+  }, [selectedPin, resetPinAt, resetPin])
+
+  const closePanel = useCallback(
+    () => (isCableMode ? setSelectedCablePin(null) : setSelectedPinNumber(null)),
+    [isCableMode, setSelectedCablePin, setSelectedPinNumber]
+  )
+
   return (
     <div className="app">
       <header className="app-header">
@@ -104,9 +151,12 @@ export default function App() {
           {isCableMode ? 'Link pins between connectors — add as many as you need' : 'Click a pin to edit its label and wire color'}
         </p>
         <div className="app-toolbar">
-          <div className="mode-toggle-wrap">
+          <div className="mode-toggle-wrap" role="tablist" aria-label="View mode">
             <button
               type="button"
+              role="tab"
+              aria-selected={!isCableMode}
+              aria-pressed={!isCableMode}
               className={`mode-toggle-btn ${!isCableMode ? 'mode-toggle-active' : ''}`}
               onClick={() => { setMode('single'); setSelectedCablePin(null); }}
             >
@@ -114,6 +164,9 @@ export default function App() {
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={isCableMode}
+              aria-pressed={isCableMode}
               className={`mode-toggle-btn ${isCableMode ? 'mode-toggle-active' : ''}`}
               onClick={() => { setMode('cable'); setSelectedPinNumber(null); }}
             >
@@ -129,7 +182,7 @@ export default function App() {
                   <div className="connector-select-row">
                     <select
                       id={`connector-${i}`}
-                      value={i === 0 ? connectorTypeId : cableConnectors[i - 1]?.connectorTypeId}
+                      value={i === 0 ? connectorTypeId : (cableConnectors[i - 1]?.connectorTypeId ?? '')}
                       onChange={(e) => {
                         setConnectorTypeAt(i, e.target.value)
                         setSelectedCablePin(null)
@@ -162,6 +215,9 @@ export default function App() {
                       </button>
                     )}
                   </div>
+                  {!conn && (
+                    <span className="connector-error" role="alert">Unknown connector type</span>
+                  )}
                 </div>
               ))}
               <button
@@ -217,6 +273,7 @@ export default function App() {
                   onKeyDown={(e) => e.key === 'Enter' && handleSaveAs()}
                   className="save-as-input"
                   autoFocus
+                  aria-label="Configuration name"
                 />
                 <button type="button" className="btn-save-as" onClick={handleSaveAs}>
                   Save
@@ -250,6 +307,8 @@ export default function App() {
                 className="btn-manage-saved"
                 onClick={() => setShowSavedList((v) => !v)}
                 title="Manage saved configurations"
+                aria-label="Manage saved configurations"
+                aria-expanded={showSavedList}
               >
                 ⋮
               </button>
@@ -267,6 +326,7 @@ export default function App() {
                 onChange={handleFileChange}
                 className="file-input-hidden"
                 aria-hidden
+                tabIndex={-1}
               />
               <button type="button" className="btn-import-json" onClick={handleUploadClick} title="Upload a previously exported JSON file">
                 Upload JSON
@@ -277,6 +337,14 @@ export default function App() {
         {importError && (
           <p className="import-error" role="alert">
             {importError}
+          </p>
+        )}
+        {storageError && (
+          <p className="storage-error" role="alert">
+            {storageError}
+            <button type="button" className="storage-error-dismiss" onClick={clearStorageError} aria-label="Dismiss storage error">
+              ×
+            </button>
           </p>
         )}
 
@@ -306,34 +374,44 @@ export default function App() {
 
       <main className="app-main">
         <div className="app-canvas">
-          {isHydrated && isCableMode && cableConnectorsList.some(Boolean) ? (
-            <CableAssemblyView
-              connectors={cableConnectorsList}
-              getPinStateAt={getPinStateAt}
-              pinLinks={pinLinks}
-              selectedPin={selectedCablePin}
-              onSelectPin={(connectorIndex, pinNumber) => setSelectedCablePin({ connectorIndex, pinNumber })}
-            />
-          ) : isHydrated ? (
+          {!isHydrated ? (
+            <div className="app-loading" role="status" aria-live="polite">
+              <p>Loading connector…</p>
+            </div>
+          ) : isCableMode ? (
+            cableConnectorsList.some(Boolean) ? (
+              <CableAssemblyView
+                connectors={cableConnectorsList}
+                getPinStateAt={getPinStateAt}
+                pinLinks={pinLinks}
+                selectedPin={selectedCablePin}
+                onSelectPin={handleSelectCablePin}
+              />
+            ) : (
+              <div className="app-empty" role="status">
+                <p>No connectors in this assembly. Add one to get started.</p>
+              </div>
+            )
+          ) : (
             <ConnectorView
               connector={connector}
               getPinState={getPinState}
               selectedPinNumber={selectedPinNumber}
               onSelectPin={setSelectedPinNumber}
             />
-          ) : null}
+          )}
         </div>
 
         {selectedPin != null && (
           <PinSidePanel
             pinNumber={typeof selectedPin === 'object' ? selectedPin.pinNumber : selectedPin}
             pinState={selectedPinState}
-            onUpdatePin={typeof selectedPin === 'object' ? (_pinNum, updates) => updatePinAt(selectedPin.connectorIndex, selectedPin.pinNumber, updates) : updatePin}
-            onResetPin={typeof selectedPin === 'object' ? () => resetPinAt(selectedPin.connectorIndex, selectedPin.pinNumber) : resetPin}
-            onClose={() => (isCableMode ? setSelectedCablePin(null) : setSelectedPinNumber(null))}
+            onUpdatePin={handleUpdateSelectedPin}
+            onResetPin={handleResetSelectedPin}
+            onClose={closePanel}
             connectorIndex={typeof selectedPin === 'object' ? selectedPin.connectorIndex : null}
-            otherConnectors={typeof selectedPin === 'object' ? cableConnectorsList.filter((_, i) => i !== selectedPin.connectorIndex) : null}
-            connectorIndices={typeof selectedPin === 'object' ? cableConnectorsList.map((_, i) => i).filter((i) => i !== selectedPin.connectorIndex) : null}
+            otherConnectors={otherConnectorsForPanel}
+            connectorIndices={otherConnectorIndices}
             linkedTo={typeof selectedPin === 'object' ? getLinkedPin(selectedPin.connectorIndex, selectedPin.pinNumber) : null}
             onAddLink={addLink}
             onRemoveLink={removeLink}

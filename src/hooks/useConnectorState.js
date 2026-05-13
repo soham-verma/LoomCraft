@@ -1,17 +1,27 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { CONNECTOR_TYPES, DEFAULT_PRESET_ID, COLOR_PRESETS } from '../connectors/config'
 
 const STORAGE_KEY = 'connector-pin-tool'
+const PERSIST_DEBOUNCE_MS = 200
 
+const DEFAULT_PRESET = COLOR_PRESETS.find((p) => p.id === DEFAULT_PRESET_ID) || COLOR_PRESETS[0]
+const DEFAULT_COLOR = DEFAULT_PRESET?.color ?? '#6c757d'
+
+/** Build the full default pin map for a connector. Only call when needed (init / reset / load). */
 function getDefaultPinState(connector) {
-  const preset = COLOR_PRESETS.find((p) => p.id === DEFAULT_PRESET_ID) || COLOR_PRESETS[0]
   return Object.fromEntries(
     Array.from({ length: connector.totalPins }, (_, i) => {
       const pinNumber = i + 1
-      const label = connector.defaultLabels[pinNumber] ?? `Pin ${pinNumber}`
-      return [pinNumber, { label, color: preset.color, presetId: DEFAULT_PRESET_ID }]
+      const label = connector.defaultLabels?.[pinNumber] ?? `Pin ${pinNumber}`
+      return [pinNumber, { label, color: DEFAULT_COLOR, presetId: DEFAULT_PRESET_ID }]
     })
   )
+}
+
+/** Cheap single-pin default — avoids allocating the full pin map per render. */
+function getSinglePinDefault(connector, pinNumber) {
+  const label = connector?.defaultLabels?.[pinNumber] ?? `Pin ${pinNumber}`
+  return { label, color: DEFAULT_COLOR, presetId: DEFAULT_PRESET_ID }
 }
 
 function loadStorage() {
@@ -34,36 +44,33 @@ function loadSavedConfigs() {
   return Array.isArray(data.savedConfigs) ? data.savedConfigs : []
 }
 
-function saveState(connectorTypeId, pinOverrides) {
+/** Persist into the shared storage blob. Returns Error or null. */
+function writeStorage(updater) {
   try {
     const data = loadStorage()
-    const all = data.connectors ?? {}
-    all[connectorTypeId] = { pinOverrides }
-    data.connectors = all
-    data.lastConnector = connectorTypeId
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-  } catch (_) {}
+    const next = updater(data)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+    return null
+  } catch (err) {
+    return err instanceof Error ? err : new Error('Storage write failed')
+  }
 }
 
-function persistSavedConfigs(configs) {
-  try {
-    const data = loadStorage()
-    data.savedConfigs = configs
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-  } catch (_) {}
-}
+const EXPORT_VERSION = 2
 
-const EXPORT_VERSION = 1
-
-function buildExportData() {
+function buildExportData(extras) {
   const data = loadStorage()
-  return {
+  const base = {
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
     connectors: data.connectors ?? {},
     savedConfigs: Array.isArray(data.savedConfigs) ? data.savedConfigs : [],
     lastConnector: data.lastConnector ?? 'DB25',
   }
+  if (extras && typeof extras === 'object') {
+    return { ...base, ...extras }
+  }
+  return base
 }
 
 function downloadJson(data, filename) {
@@ -88,43 +95,55 @@ export function useConnectorState() {
   })
   const [pinOverrides, setPinOverrides] = useState({})
   const [selectedPinNumber, setSelectedPinNumber] = useState(null)
+  const [storageError, setStorageError] = useState(null)
+  /** Bumped by applyConnectorConfig to force the init effect to re-run for the same connector type. */
+  const [reloadToken, setReloadToken] = useState(0)
+  /** When set during a config load, the init effect uses these overrides instead of reading storage. */
+  const pendingOverridesRef = useRef(null)
 
   const connector = CONNECTOR_TYPES[connectorTypeId]
   const isHydrated = connector != null
 
-  // Initialize or switch connector: merge saved overrides with defaults for this connector
+  // Initialize or switch connector: merge saved overrides with defaults for this connector.
   useEffect(() => {
     if (!connector) return
-    const allSaved = loadAllState()
-    const saved = allSaved[connectorTypeId]
     const base = getDefaultPinState(connector)
-    if (saved && saved.pinOverrides) {
-      setPinOverrides((prev) => {
-        const next = { ...base }
-        Object.entries(saved.pinOverrides).forEach(([key, value]) => {
-          const num = parseInt(key, 10)
-          if (num >= 1 && num <= connector.totalPins && value && typeof value === 'object') {
-            next[num] = { ...base[num], ...value }
-          }
-        })
-        return next
+    const pending = pendingOverridesRef.current
+    pendingOverridesRef.current = null
+    const source = pending ?? loadAllState()[connectorTypeId]?.pinOverrides
+    if (source && typeof source === 'object') {
+      const next = { ...base }
+      Object.entries(source).forEach(([key, value]) => {
+        const num = parseInt(key, 10)
+        if (num >= 1 && num <= connector.totalPins && value && typeof value === 'object') {
+          next[num] = { ...base[num], ...value }
+        }
       })
+      setPinOverrides(next)
     } else {
       setPinOverrides(base)
     }
-  }, [connectorTypeId])
+    // reloadToken intentionally included so external "load same connector" forces re-init
+  }, [connectorTypeId, connector, reloadToken])
 
-  // Persist on change
+  // Persist on change (debounced to coalesce rapid edits and reduce JSON.stringify pressure).
   useEffect(() => {
     if (!connector || Object.keys(pinOverrides).length === 0) return
-    saveState(connectorTypeId, pinOverrides)
-  }, [connectorTypeId, pinOverrides])
+    const handle = setTimeout(() => {
+      const err = writeStorage((data) => {
+        const all = data.connectors ?? {}
+        all[connectorTypeId] = { pinOverrides }
+        return { ...data, connectors: all, lastConnector: connectorTypeId }
+      })
+      if (err) setStorageError(err.message || 'Failed to save')
+    }, PERSIST_DEBOUNCE_MS)
+    return () => clearTimeout(handle)
+  }, [connectorTypeId, pinOverrides, connector])
 
   const getPinState = useCallback(
     (pinNumber) => {
       if (pinOverrides[pinNumber]) return pinOverrides[pinNumber]
-      const def = getDefaultPinState(connector)
-      return def[pinNumber] ?? { label: `Pin ${pinNumber}`, color: '#6c757d', presetId: DEFAULT_PRESET_ID }
+      return getSinglePinDefault(connector, pinNumber)
     },
     [connector, pinOverrides]
   )
@@ -138,66 +157,104 @@ export function useConnectorState() {
 
   const resetPin = useCallback(
     (pinNumber) => {
-      const def = getDefaultPinState(connector)[pinNumber]
-      setPinOverrides((prev) => ({ ...prev, [pinNumber]: def }))
+      setPinOverrides((prev) => ({
+        ...prev,
+        [pinNumber]: getSinglePinDefault(connector, pinNumber),
+      }))
     },
     [connector]
   )
 
   const resetAllPins = useCallback(() => {
+    if (!connector) return
     setPinOverrides(getDefaultPinState(connector))
   }, [connector])
 
   const [savedConfigs, setSavedConfigs] = useState([])
   useEffect(() => {
     setSavedConfigs(loadSavedConfigs())
-  }, []) // load once on mount; will refresh after save/delete
+  }, [])
 
   const refreshSavedConfigs = useCallback(() => {
     setSavedConfigs(loadSavedConfigs())
   }, [])
 
+  /**
+   * Apply a saved single-connector config (type + pin overrides) immediately.
+   * Works correctly even when the connector type is the same as the current one,
+   * because `reloadToken` is bumped to force the init effect to re-run.
+   */
+  const applyConnectorConfig = useCallback(({ connectorTypeId: nextId, pinOverrides: nextOverrides }) => {
+    if (!nextId || !CONNECTOR_TYPES[nextId]) return
+    pendingOverridesRef.current = nextOverrides && typeof nextOverrides === 'object' ? nextOverrides : null
+    if (nextId === connectorTypeId) {
+      setReloadToken((t) => t + 1)
+    } else {
+      setConnectorTypeId(nextId)
+    }
+    setSelectedPinNumber(null)
+  }, [connectorTypeId])
+
   const saveAsConfig = useCallback(
-    (name) => {
+    (name, extras) => {
       const trimmed = (name || '').trim()
-      if (!trimmed) return
+      if (!trimmed) return null
       const configs = loadSavedConfigs()
       const newConfig = {
         id: crypto.randomUUID?.() ?? `saved-${Date.now()}`,
         name: trimmed,
         connectorTypeId,
         pinOverrides: { ...pinOverrides },
+        ...(extras && typeof extras === 'object' ? extras : {}),
       }
       configs.push(newConfig)
-      persistSavedConfigs(configs)
+      const err = writeStorage((data) => ({ ...data, savedConfigs: configs }))
+      if (err) {
+        setStorageError(err.message || 'Failed to save configuration')
+        return null
+      }
       setSavedConfigs(configs)
+      return newConfig
     },
     [connectorTypeId, pinOverrides]
   )
 
-  const loadConfig = useCallback((id) => {
-    const configs = loadSavedConfigs()
-    const config = configs.find((c) => c.id === id)
-    if (!config?.pinOverrides) return
-    saveState(config.connectorTypeId, config.pinOverrides)
-    setConnectorTypeId(config.connectorTypeId)
-    setPinOverrides(config.pinOverrides)
-    setSelectedPinNumber(null)
-  }, [])
+  const loadConfig = useCallback(
+    (id) => {
+      const configs = loadSavedConfigs()
+      const config = configs.find((c) => c.id === id)
+      if (!config?.connectorTypeId) return null
+      applyConnectorConfig({
+        connectorTypeId: config.connectorTypeId,
+        pinOverrides: config.pinOverrides ?? {},
+      })
+      return config
+    },
+    [applyConnectorConfig]
+  )
 
   const deleteConfig = useCallback((id) => {
     const configs = loadSavedConfigs().filter((c) => c.id !== id)
-    persistSavedConfigs(configs)
+    const err = writeStorage((data) => ({ ...data, savedConfigs: configs }))
+    if (err) {
+      setStorageError(err.message || 'Failed to delete configuration')
+      return
+    }
     setSavedConfigs(configs)
   }, [])
 
-  const exportToFile = useCallback(() => {
-    const data = buildExportData()
+  const exportToFile = useCallback((extras) => {
+    const data = buildExportData(extras)
     const filename = `connector-pin-config-${new Date().toISOString().slice(0, 10)}.json`
     downloadJson(data, filename)
   }, [])
 
-  const importFromFile = useCallback((file) => {
+  /**
+   * Import a JSON file.
+   * The optional `applyExtras` callback receives the parsed object so callers
+   * can hydrate additional state (e.g., cable assembly) atomically.
+   */
+  const importFromFile = useCallback((file, applyExtras) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => {
@@ -209,24 +266,36 @@ export function useConnectorState() {
             return
           }
           const connectors = data.connectors && typeof data.connectors === 'object' ? data.connectors : {}
-          const savedConfigs = Array.isArray(data.savedConfigs) ? data.savedConfigs : []
+          const incomingSaved = Array.isArray(data.savedConfigs) ? data.savedConfigs : []
           const lastConnector = CONNECTOR_TYPES[data.lastConnector] ? data.lastConnector : 'DB25'
           const toStore = {
             connectors,
-            savedConfigs,
+            savedConfigs: incomingSaved,
             lastConnector,
           }
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore))
-          setSavedConfigs(savedConfigs)
-          setConnectorTypeId(lastConnector)
-          const current = connectors[lastConnector]?.pinOverrides
-          if (current && typeof current === 'object') {
-            setPinOverrides(current)
-          } else {
-            setPinOverrides(getDefaultPinState(CONNECTOR_TYPES[lastConnector]))
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(toStore))
+          } catch (writeErr) {
+            const message = writeErr?.message || 'Failed to write to storage (quota?)'
+            setStorageError(message)
+            reject(new Error(message))
+            return
           }
-          setSelectedPinNumber(null)
-          resolve()
+          setSavedConfigs(incomingSaved)
+          const current = connectors[lastConnector]?.pinOverrides
+          applyConnectorConfig({
+            connectorTypeId: lastConnector,
+            pinOverrides: current && typeof current === 'object' ? current : null,
+          })
+          if (typeof applyExtras === 'function') {
+            try {
+              applyExtras(data)
+            } catch (extraErr) {
+              reject(extraErr)
+              return
+            }
+          }
+          resolve(data)
         } catch (e) {
           reject(e)
         }
@@ -234,14 +303,20 @@ export function useConnectorState() {
       reader.onerror = () => reject(reader.error)
       reader.readAsText(file, 'UTF-8')
     })
-  }, [])
+  }, [applyConnectorConfig])
+
+  const clearStorageError = useCallback(() => setStorageError(null), [])
+
+  const connectorTypes = useMemo(() => CONNECTOR_TYPES, [])
 
   return {
     connectorTypeId,
     setConnectorTypeId,
     connector,
-    connectorTypes: CONNECTOR_TYPES,
+    connectorTypes,
     pinOverrides,
+    setPinOverrides,
+    applyConnectorConfig,
     getPinState,
     updatePin,
     resetPin,
@@ -256,5 +331,7 @@ export function useConnectorState() {
     refreshSavedConfigs,
     exportToFile,
     importFromFile,
+    storageError,
+    clearStorageError,
   }
 }

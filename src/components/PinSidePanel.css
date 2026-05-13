@@ -218,3 +218,23 @@
   border-color: #dc3545;
   color: #dc3545;
 }
+
+/* Focus visibility for keyboard navigation. */
+.pin-preset-btn:focus-visible,
+.pin-btn:focus-visible,
+.pin-btn-unlink:focus-visible,
+.pin-side-panel-close:focus-visible {
+  outline: 2px solid var(--accent, #58a6ff);
+  outline-offset: 2px;
+}
+
+/* Small-screen behavior: stack the side panel below the canvas. */
+@media (max-width: 720px) {
+  .pin-side-panel {
+    width: 100%;
+    min-width: 0;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    max-height: 60vh;
+  }
+}

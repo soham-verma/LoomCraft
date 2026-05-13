@@ -1,5 +1,9 @@
 name = "loomcraft"
 compatibility_date = "2026-02-10"
 
+# SPA: serve real files under dist/ first; only then fall back to /index.html.
+# If you see "disallowed MIME type text/html" for /assets/*.js, the hashed file
+# is missing from dist (partial deploy) or a CDN cached old index.html.
 [assets]
 directory = "./dist"
+not_found_handling = "single-page-application"

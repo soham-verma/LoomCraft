@@ -8,11 +8,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  width: 100%;
+  max-width: 100%;
 }
 
 .connector-svg {
   width: 100%;
-  max-width: 520px;
+  max-width: 100%;
   height: auto;
   min-height: 200px;
 }
@@ -26,7 +28,14 @@
 }
 
 .pin-group {
-  /* no transform on group – avoids layout shift */
+  cursor: pointer;
+  outline: none;
+}
+
+.pin-group:focus-visible .pin-circle {
+  stroke: var(--accent, #58a6ff);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 4px var(--accent, #58a6ff));
 }
 
 .pin-zoom {
@@ -55,7 +64,7 @@
 
 .connector-labels {
   width: 100%;
-  max-width: 520px;
+  max-width: 100%;
   margin-top: 12px;
   display: flex;
   flex-direction: column;
@@ -73,10 +82,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
-  padding: 2px 4px;
+  font-size: 11px;
+  padding: 4px 8px;
   border-radius: 4px;
   background: rgba(255,255,255,0.04);
+  min-width: 140px;
 }
 
 .pin-label-num {
@@ -90,4 +100,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
+}
+
+@media (min-width: 900px) {
+  .connector-view .pin-label-item {
+    min-width: 180px;
+    font-size: 12px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .connector-view .pin-label-item {
+    min-width: 220px;
+    font-size: 13px;
+  }
 }

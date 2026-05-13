@@ -12,9 +12,19 @@
 
 .cable-assembly-svg {
   width: 100%;
-  max-width: 900px;
+  max-width: 100%;
   height: auto;
   min-height: 200px;
+}
+
+@media (max-width: 720px) {
+  .cable-assembly-labels {
+    gap: 16px 12px;
+  }
+  .cable-assembly-view .pin-label-item {
+    font-size: 9px;
+    padding: 1px 4px;
+  }
 }
 
 .cable-link-path {
@@ -85,7 +95,8 @@
 }
 
 .pin-group {
-  /* avoid layout shift */
+  cursor: pointer;
+  outline: none;
 }
 
 .pin-zoom {
@@ -95,4 +106,10 @@
 
 .pin-group:hover .pin-zoom {
   transform: scale(1.15);
+}
+
+.pin-group:focus-visible .pin-circle {
+  stroke: var(--accent, #58a6ff);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 4px var(--accent, #58a6ff));
 }
